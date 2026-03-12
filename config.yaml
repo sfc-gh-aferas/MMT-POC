@@ -1,0 +1,83 @@
+# =============================================================================
+# ML Pipeline Configuration
+# Central configuration for feature engineering, training, and inference jobs.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Database Connection Settings
+# -----------------------------------------------------------------------------
+connection:
+  database: "MMT_POC"                      # Snowflake database name
+  schema_data: "FORECASTING"             # Schema for data tables
+  stage_artifacts: "ML_STAGE" # Internal stage for ML artifacts
+  compute_pool: "MMT_POC_POOL_50"        # Compute pool for distributed jobs
+  target_cluster_size: 50     # Number of worker nodes for distributed training
+  warehouse: "MMT_POC_M"                    # Warehouse for SQL operations
+  tag: "run1"
+
+# -----------------------------------------------------------------------------
+# Table Name Mappings
+# Keys used by get_fully_qualified_name() to resolve table references.
+# -----------------------------------------------------------------------------
+tables:
+  # Source tables
+  fact_ic_volume: "FACT_IC_VOLUME"       # Raw daily case volume data
+  dim_calendar: "DIM_CALENDAR"           # Calendar dimension with holidays
+  
+  # Feature tables
+  features_enriched: "FEATURES_ENRICHED" # Final features for training/inference
+  
+  # Model and prediction tables
+  ic_predictions: "IC_PREDICTIONS"       # Inference output predictions
+  model_catalog: "MODEL_CATALOG"         # Active model registry
+  model_catalog_history: "MODEL_CATALOG_HISTORY" # Archived model versions
+  model_performance_log: "MODEL_PERFORMANCE_LOG" # Drift detection metrics
+  training_metrics: "TRAINING_METRICS"   # Per-partition training metrics
+  scoring_transient: "SCORING_TRANSIENT_TABLE"   # Temp table for scoring data
+
+ml_jobs:
+  # -----------------------------------------------------------------------------
+  # Training Configuration
+  # -----------------------------------------------------------------------------
+  training:
+    drift_threshold: 1.5        # Models with drift_ratio > threshold are retrained
+    holdout_days: 56            # Days reserved for test set (8 weeks)
+    
+    # XGBoost hyperparameters for all partitions
+    xgb_params:
+      n_estimators: 300
+      max_depth: 6
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      n_jobs: 1                 # Single-threaded per partition (parallelism via DPF)
+      random_state: 42
+
+  # -----------------------------------------------------------------------------
+  # Inference Configuration
+  # -----------------------------------------------------------------------------
+  inference:
+    drift_threshold: 1.5        # Flag model as drifted if MAE exceeds threshold
+    holdout_days: 56            # Scoring window for predictions
+    eaches_per_case: 24         # Conversion factor: eaches = cases * 24
+
+# -----------------------------------------------------------------------------
+# POC Data Generation Settings
+# Used for generating synthetic test data.
+# -----------------------------------------------------------------------------
+poc_data:
+  partitions: 100
+  days_history: 730           # 2 years of historical data
+  start_date: "2024-03-02"
+
+# -----------------------------------------------------------------------------
+# Scale Presets (for reference)
+# -----------------------------------------------------------------------------
+# TEST MODE: Quick validation (~5 min total pipeline) 
+#   num_stores: 10, num_materials: 10
+
+# MEDIUM MODE: More realistic (~20 min total pipeline)  
+#   num_stores: 50, num_materials: 20
+
+# PRODUCTION MODE: Full scale (~30-45 min total pipeline)
+#   num_stores: 700, num_materials: 20
