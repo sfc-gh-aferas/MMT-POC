@@ -1,6 +1,8 @@
-# MMT-POC: Many Model Training Proof of Concept
+# MMT-POC: Many Model Training Proof of Concept/Consumption estimation
 
-Proof of concept for distributed many-model training and inference using Snowflake ML Jobs. Trains timeseries forecasting XGBoost models per partition using the Many Model Training (MMT) frameworks.
+Proof of concept and consumption estimation for distributed many-model training and inference using Snowflake ML Jobs. Trains timeseries forecasting XGBoost models per partition using the Many Model Training (MMT) frameworks.
+
+Uses notebooks for setup and orchestration to enable running either locally or in Snowflake workspaces.
 
 **This poc will set up new databases, warehouses, and compute pools, but relies on an existing role and set of privileges from your default connection**
 

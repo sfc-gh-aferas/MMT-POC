@@ -97,7 +97,8 @@ def create_session(query_tag_suffix: str = "") -> Session:
     session.use_schema(conn_cfg['schema'])
     session.use_warehouse(conn_cfg['warehouse'])
     if conn_cfg['tag']:
-        session.query_tag = conn_cfg['tag']+query_tag_suffix
+        tag = f"{conn_cfg['tag']}_{query_tag_suffix}" if query_tag_suffix else conn_cfg['tag']
+        session.sql(f"ALTER SESSION SET QUERY_TAG = '{tag}'").collect()
     return session
 
 
