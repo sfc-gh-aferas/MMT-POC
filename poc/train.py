@@ -5,6 +5,7 @@ from snowflake.snowpark import Window
 from snowflake.ml.data.data_connector import DataConnector
 from snowflake.ml.modeling.distributors.many_model import ManyModelTraining, PickleSerde
 from snowflake.ml.modeling.distributors.distributed_partition_function.entities import ExecutionOptions
+from register import register_model
 
 from datetime import datetime
 import json
@@ -208,3 +209,4 @@ def run_training(session: Session = None):
 
 if __name__ == "__main__":
     run_training()
+    register_model()
