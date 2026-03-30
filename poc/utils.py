@@ -42,14 +42,16 @@ def get_feature_config() -> dict:
 def get_training_config() -> dict:
     """Return training parameters from config."""
     cfg = load_config()["training"]
-    cfg["compute_pool_name"] = f"MMT_POC_TRAIN_{cfg['instance_family']}_{cfg['target_cluster_size']}"
+    if cfg["mljob"]:
+        cfg["compute_pool_name"] = f"MMT_POC_TRAIN_{cfg['instance_family']}_{cfg['target_cluster_size']}"
     return cfg
 
 
 def get_inference_config() -> dict:
     """Return inference parameters from config."""
     cfg = load_config()["inference"]
-    cfg["compute_pool_name"] = f"MMT_POC_INFER_{cfg['instance_family']}_{cfg['target_cluster_size']}"
+    if cfg["mljob"]:
+        cfg["compute_pool_name"] = f"MMT_POC_INFER_{cfg['instance_family']}_{cfg['target_cluster_size']}"
     return cfg
 
 
@@ -89,16 +91,15 @@ def get_stage_path(subpath: str = "") -> str:
     return base
 
 
-def create_session(query_tag_suffix: str = "") -> Session:
+def create_session(query_tag: str = "") -> Session:
     """Create and configure a Snowpark session using config settings."""
     conn_cfg = get_connection_config()
     session = Session.builder.getOrCreate()
     session.use_database(conn_cfg['database'])
     session.use_schema(conn_cfg['schema'])
     session.use_warehouse(conn_cfg['warehouse'])
-    if conn_cfg['tag']:
-        tag = f"{conn_cfg['tag']}_{query_tag_suffix}" if query_tag_suffix else conn_cfg['tag']
-        session.sql(f"ALTER SESSION SET QUERY_TAG = '{tag}'").collect()
+    if query_tag:
+        session.sql(f"ALTER SESSION SET QUERY_TAG = '{query_tag}'").collect()
     return session
 
 

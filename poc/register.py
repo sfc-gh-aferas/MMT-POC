@@ -98,7 +98,7 @@ def build_stage_paths(session: Session) -> Dict[str, str]:
 def register_model(session: Session = None, model_name: str = "MMT_POC"):
     """Log partitioned model to Snowflake Model Registry with test prediction."""
     if session is None:
-        session = create_session("REGISTER")
+        session = create_session()
         print(f"Connected: {session.get_current_account()}")
     
     print(f"\n📦 Registering Partitioned Model to Snowflake Model Registry")
@@ -148,7 +148,7 @@ def register_model(session: Session = None, model_name: str = "MMT_POC"):
         model_name=model_name,
         signatures={"predict": sig},
         options={"function_type": "TABLE_FUNCTION"},
-        conda_dependencies=["xgboost==2.0.3", "pandas", "numpy==1.26.4"],
+        conda_dependencies=["xgboost", "pandas", "numpy"],
         target_platforms=["WAREHOUSE","SNOWPARK_CONTAINER_SERVICES"],
     )
     

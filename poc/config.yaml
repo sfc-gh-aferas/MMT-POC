@@ -39,6 +39,7 @@ poc_data:
 # Training Configuration
 # -----------------------------------------------------------------------------
 training:
+  mljob: True # if false, will run on warehouse. If true, must specify instance family and cluster size
   instance_family: "CPU_X64_S" # compute pool instance family.
   target_cluster_size: 5       # Number of worker nodes for distributed training.
 
@@ -47,5 +48,6 @@ training:
 # Inference Configuration
 # -----------------------------------------------------------------------------
 inference:
-  instance_family: "CPU_X64_S" # compute pool instance family.
-  target_cluster_size: 5       # Number of worker nodes for distributed training.
+  mljob: False
+  # instance_family: "CPU_X64_S" # compute pool instance family.
+  # target_cluster_size: 5       # Number of worker nodes for distributed training.

@@ -1,14 +1,19 @@
 """Many Model Training pipeline: trains one XGBoost model per partition."""
 from snowflake.snowpark import Session
+import snowflake.snowpark as sp
 from snowflake.snowpark import functions as F
 from snowflake.snowpark import Window
-from snowflake.ml.data.data_connector import DataConnector
-from snowflake.ml.modeling.distributors.many_model import ManyModelTraining, PickleSerde
-from snowflake.ml.modeling.distributors.distributed_partition_function.entities import ExecutionOptions
+from snowflake.snowpark import types as T
 from register import register_model
+
+from xgboost import XGBRegressor
+import pickle
+import json
 
 from datetime import datetime
 import json
+import tempfile
+import os
 from utils import (
     get_training_config, get_feature_config,
     create_session, get_stage_path,
@@ -16,6 +21,7 @@ from utils import (
 )
 
 import pandas as pd
+import numpy as np
 
 train_cfg = get_training_config()
 feature_cfg = get_feature_config()
@@ -27,20 +33,14 @@ TIME = feature_cfg["time_col"]
 EXCLUDE_COLS = [GRAIN, TARGET, TIME]
 TEST_PCT = feature_cfg["test_pct"]
 
-def train_partition(data_connector: DataConnector, context):
+def train_partition(df: pd.DataFrame) -> pd.DataFrame:
     """DPF worker: train XGBoost model, compute metrics, upload artifacts.
     Update this function for specific use cases"""
-    import pandas as pd
-    import numpy as np
-    import json
-    from datetime import datetime
-    from xgboost import XGBRegressor
     
-    df = data_connector.to_pandas()
-
     if df.empty:
         return None
     
+    df.columns = INPUT_COLS
     feature_cols = [c for c in df.columns if c not in EXCLUDE_COLS]
     
     X_train = df[feature_cols].astype("float32")
@@ -62,16 +62,15 @@ def train_partition(data_connector: DataConnector, context):
         "TRAIN_ROWS": int(len(df)),
         "FEATURE_IMPORTANCES": feature_importances,
     }
+
+    # Save the model
+    model_binary = pickle.dumps(model)
     
-    metrics_df = pd.DataFrame([{
-        "PARTITION_ID": context.partition_id.split('/')[1],
-        "TRAINED_AT": datetime.utcnow().isoformat(),
-        "METRICS": metrics,
-    }])
-    
-    context.upload_to_stage(metrics_df, "metrics.parquet",
-                            write_function=lambda pdf, path: pdf.to_parquet(path, index=False))
-    return model
+    model_df = pd.DataFrame(
+        [[model.__class__.__name__, model_binary, metrics]],
+        columns=["ALGORITHM", "MODEL_BINARY", "METRICS"],
+    )
+    return model_df
 
 def get_train_version() -> str:
     """Generate timestamped version string (e.g., v20240315_1430)."""
@@ -120,31 +119,100 @@ def prepare_data(session: Session):
     
     print(f"   Train rows: {train_count:,}")
     print(f"   Test rows: {test_count:,}")
-    
-    stage_data_partitioned(session, "TRAIN_DATA", "train_features", partition_col=GRAIN)
-    
-    return train_count, test_count
+        
+    return train_df, test_df
+
+class ModelTrainingUDTF:
+    """Class which is registered as a UDTF to train forecasting models."""
+
+    def end_partition(self, df):
+        """End partition method which utilizes the train model function."""
+        model_df = train_partition(df)
+        yield model_df
 
 
-def execute_training(session: Session, train_run_id: str):
+def execute_training(session: Session, train_run_id: str, train_df: sp.DataFrame):
     """Run ManyModelTraining to train models across all partitions."""
+    global INPUT_COLS
+
+    INPUT_COLS = [c for c in train_df.columns if c not in [TIME, GRAIN]]
+    vect_udtf_input_dtypes = [
+        T.PandasDataFrameType(
+            [
+                field.datatype
+                for field in train_df.schema.fields
+                if field.name in INPUT_COLS
+            ]
+        )
+    ]
+
+    udtf_name = f"MODEL_TRAINER_{train_run_id}"
+    session.udtf.register(
+        ModelTrainingUDTF,
+        name=udtf_name,
+        input_types=vect_udtf_input_dtypes,
+        output_schema=T.PandasDataFrameType(
+            [T.StringType(), T.BinaryType(), T.VariantType()],
+            ["ALGORITHM", "MODEL_BINARY", "METRICS"],
+        ),
+        packages=[
+            "snowflake-snowpark-python",
+            "pandas",
+            "numpy",
+            "xgboost",
+            "scikit-learn",
+        ],
+        replace=True,
+        is_permanent=False,
+    )
+
+    udtf_models = train_df.select(
+        GRAIN,
+        TIME,
+        TARGET,
+        F.call_table_function(udtf_name, *INPUT_COLS).over(
+            partition_by=[GRAIN],
+            order_by=TIME,
+        ),
+    )
+
+    udtf_models = udtf_models.select(
+        GRAIN,
+        "ALGORITHM",
+        F.lit(train_run_id).alias("RUN_ID"),
+        "MODEL_BINARY",
+        "METRICS",
+    )
+
     stage_path = get_stage_path()
-    trainer = ManyModelTraining(
-        train_func=train_partition,
-        stage_name=stage_path.replace("@", ""),
-        serde=PickleSerde(),
+    rows = udtf_models.collect()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for row in rows:
+            partition_id = row[GRAIN]
+            model_binary = row["MODEL_BINARY"]
+            metrics = row["METRICS"]
+
+            partition_dir = os.path.join(tmpdir, str(partition_id))
+            os.makedirs(partition_dir, exist_ok=True)
+
+            pkl_path = os.path.join(partition_dir, "model.pkl")
+            with open(pkl_path, "wb") as f:
+                f.write(model_binary)
+
+            stage_dest = f"{stage_path}/{train_run_id}/{partition_id}/"
+            session.file.put(pkl_path, stage_dest, auto_compress=False, overwrite=True)
+
+    metrics_df = session.create_dataframe(
+        [
+            (row[GRAIN], datetime.utcnow().strftime("%Y-%m-%d"), row["METRICS"])
+            for row in rows
+        ],
+        schema=["PARTITION_ID", "TRAINED_AT", "METRICS"],
     )
-    
-    train_run = trainer.run_from_stage(
-        stage_location=f"{stage_path}/train_features/",
-        run_id=train_run_id,
-        file_pattern="*.parquet",
-        on_existing_artifacts="overwrite",
-    )
-    
-    train_status = train_run.wait()
-    print(f"\n   Training status: {train_status}")
-    return train_status
+    metrics_df.write.mode("overwrite").save_as_table("MODEL_STAGING")
+
+    return udtf_models
 
 
 def collect_training_metrics(session: Session, train_run_id: str):
@@ -176,7 +244,7 @@ def update_model_catalog(session: Session, train_version: str, train_run_id: str
         if raw_name.endswith(f"/model.pkl"):
             model_dir = raw_name.rsplit("/", 1)[0]
             parts = model_dir.split("/")
-            subdir = parts[-2]
+            subdir = parts[-1]
             subdir_to_model_path.append((subdir,f"{fq_str}.{model_dir}"))
     paths = session.create_dataframe(pd.DataFrame(subdir_to_model_path, columns = [GRAIN,"STAGE_PATH"]))
 
@@ -192,30 +260,23 @@ def update_model_catalog(session: Session, train_version: str, train_run_id: str
 
 
 
-def run_training(session: Session = None) -> str:
+def run_training(session: Session):
     """Entry point: prepare data, train models, update catalog. Returns train_run_id."""
     
     train_version = get_train_version()
     train_run_id = f"training_{train_version}"
 
-    if session is None:
-        session = create_session(train_run_id)
-        print(f"Connected: {session.get_current_account()}")
-    else:
-        session.sql(f"ALTER SESSION SET QUERY_TAG = '{train_run_id}'").collect()
+    session.sql(f"ALTER SESSION SET QUERY_TAG = '{train_run_id}'").collect()
     
-    prepare_data(session)
-    execute_training(session, train_run_id)
-    collect_training_metrics(session, train_run_id)
+    train_df, test_df = prepare_data(session)
+    execute_training(session, train_run_id, train_df)
     update_model_catalog(session, train_version, train_run_id)
 
     return train_run_id
 
 if __name__ == "__main__":
-
     session = create_session()
     print(f"Connected: {session.get_current_account()}")
-    
     run_id = run_training(session)
     register_model(session)
     print(f"RUN_ID={run_id}")

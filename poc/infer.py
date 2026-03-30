@@ -113,16 +113,20 @@ def show_sample_predictions(session: Session):
     session.table(predictions_fqn).show(5)
 
 
-def run_inference(session: Session = None):
-    """Entry point: prepare data, run inference, collect predictions."""
+def run_inference(session: Session = None) -> str:
+    """Entry point: prepare data, run inference, collect predictions. Returns inference_run_id."""
+
+    latest_version = get_latest_model_version(session) if session else None
+    inference_run_id = f"inference_{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
 
     if session is None:
-        session = create_session("INFER")
+        session = create_session(inference_run_id)
         print(f"Connected: {session.get_current_account()}")
+        latest_version = get_latest_model_version(session)
+    else:
+        session.sql(f"ALTER SESSION SET QUERY_TAG = '{inference_run_id}'").collect()
     
-    latest_version = get_latest_model_version(session)
     train_run_id = f"training_{latest_version}"
-    inference_run_id = f"inference_{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
     
     print(f"📋 Using models from: {train_run_id}")
     print(f"   Inference run ID:  {inference_run_id}")
@@ -132,6 +136,11 @@ def run_inference(session: Session = None):
     collect_predictions(session, inference_run_id)
     show_sample_predictions(session)
 
+    return inference_run_id
+
 
 if __name__ == "__main__":
-    run_inference()
+    session = create_session()
+    print(f"Connected: {session.get_current_account()}")
+    run_id = run_inference(session)
+    print(f"RUN_ID={run_id}")
