@@ -7,7 +7,7 @@
 # Database Connection Settings
 # -----------------------------------------------------------------------------
 connection:
-  database: "MMT_POC"         # Snowflake database name
+  database: "DEMAND_FORECAST_POC"         # Snowflake database name
   schema: "FORECASTING"       # Schema for data tables
   stage_artifacts: "ML_STAGE" # Internal stage for ML artifacts
   warehouse: "MMT_POC_M"      # Warehouse for SQL operations
@@ -17,10 +17,10 @@ connection:
 # Feature data
 # -----------------------------------------------------------------------------
 feature_table: 
-  name: "FEATURE_TABLE"           # Partitioned time step features
-  partition_col: "PARTITION_ID"
-  time_col: "TS"
-  target_col: "TARGET"
+  name: "DEMAND_PER_ITEM"           # Partitioned time step features
+  partition_col: "Item Number Site"
+  time_col: "Perform Date"
+  target_col: "Actual Demand"
   test_pct: 0.1
 
 # -----------------------------------------------------------------------------
@@ -28,7 +28,7 @@ feature_table:
 # Used for generating synthetic test data.
 # -----------------------------------------------------------------------------
 poc_data:
-  generate: True              # If false, expects feature_table.name already exists
+  generate: False              # If false, expects feature_table.name already exists
   partitions: 100             # number of partitions/models to train
   timestep: "day"             # Options: second, minute, hour, day, week, month
   num_timesteps: 730          # Number of timesteps to generate
