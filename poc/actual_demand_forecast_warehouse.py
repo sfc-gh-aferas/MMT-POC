@@ -1,3 +1,16 @@
+"""Warehouse UDTF pipeline for weekly demand forecasting (mirrors actual_demand_forecast_spcs logic)."""
+import snowflake.snowpark as sp
+from snowflake.snowpark import Session
+from snowflake.snowpark import functions as F
+from snowflake.snowpark import Window
+from snowflake.snowpark import types as T
+
+import pandas as pd
+import numpy as np
+import re as _re
+import gc
+import time 
+from datetime import datetime
 
 """Many Model Training pipeline for weekly demand forecasting via ML Jobs on SPCS."""
 import pandas as pd
@@ -8,8 +21,6 @@ import io
 from snowflake.snowpark import Session
 from snowflake.snowpark import functions as F
 from snowflake.snowpark import Window
-from snowflake.ml.data.data_connector import DataConnector
-from snowflake.ml.modeling.distributors.many_model import ManyModelTraining, PickleSerde
 import utils
 from utils import (
     get_training_config, get_feature_config,
@@ -59,75 +70,11 @@ if 'CUDA_PATH' not in os.environ:
     else:
         print("No CUDA path auto-detected - CuPy will try default detection")
 
-#import cupy as cp # not supported on my mac
-from datetime import datetime, timedelta
-import math
-from scipy import stats
-from scipy.stats import skew, kurtosis, entropy, shapiro, kstest
-import random
-from scipy.stats import spearmanr, poisson, nbinom # gaussian_kde, norm, expon, lognorm, exponweib, weibull_min, gamma
-import sys
-import time
-import os
-import calendar
-import gc
-import ast
-from weekly_features_for_daily_forecasts import features_w_14_all, features_prev_M_all, features_prev_6M_all
 
-import warnings
-warnings.filterwarnings('ignore', category=RuntimeWarning)
-from statsmodels.tools.sm_exceptions import ValueWarning
-
-warnings.filterwarnings('ignore', category=ValueWarning)
-warnings.filterwarnings('ignore', category=FutureWarning, module='statsmodels')
-warnings.filterwarnings('ignore', message="No supported index is available")
-warnings.filterwarnings('ignore', message="A date index has been provided, but it has no associated frequency")
-
-from statsmodels.tools.sm_exceptions import ConvergenceWarning
-from statsmodels.tsa.stattools import acf, adfuller
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-warnings.filterwarnings('ignore', category=RuntimeWarning, module='statsmodels.tsa.holtwinters')
-from darts import TimeSeries
-from darts.metrics import mae
-import scipy.stats as st
-from sklearn.preprocessing import StandardScaler
-import concurrent.futures
-
-from mapie.regression import SplitConformalRegressor
-from mapie.utils import train_conformalize_test_split
 
 # imports not used
 # import xlsxwriter
 # from openpyxl import load_workbook
-
-import lightgbm as lgb
-
-from tsfresh import extract_features, extract_relevant_features, select_features
-from tsfresh.utilities.dataframe_functions import impute, roll_time_series
-
-from darts import TimeSeries, concatenate
-from darts.dataprocessing.transformers import Scaler, Mapper, InvertibleMapper
-from darts.models import KalmanForecaster, LinearRegressionModel
-from darts.models.filtering.kalman_filter import KalmanFilter
-from darts.utils.timeseries_generation import datetime_attribute_timeseries
-from darts.metrics import smape, mape, rmse, r2_score, mase, mae
-from sklearn.metrics import mean_absolute_error
-from sklego.preprocessing import RepeatingBasisFunction
-
-
-import optuna
-from optuna.pruners import HyperbandPruner
-import logging
-
-ENABLE_OPTUNA_PRINTS = False   # Set to True to see optimization progress
-ENABLE_LGBM_PRINTS = False    # Set to True to see LightGBM training progress
-
-if not ENABLE_OPTUNA_PRINTS:
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-
-from optuna.samplers import TPESampler
-from datetime import datetime
 
 train_cfg = get_training_config()
 feature_cfg = get_feature_config()
@@ -1597,15 +1544,82 @@ final_feats = pd.DataFrame()
 demand_col = 'ACTUAL_DEMAND'
 item_cnt = 0
 
-def forecast_partition(data_connector: DataConnector, context):
+def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     """MMT worker: run weekly demand forecast for one partition (item), upload results to stage."""
 
     import pandas as pd
     import numpy as np
     import gc
 
-    input_df = data_connector.to_pandas()
-    if input_df.empty:
+    import lightgbm as lgb
+
+    from tsfresh import extract_features, extract_relevant_features, select_features
+    from tsfresh.utilities.dataframe_functions import impute, roll_time_series
+    
+    from darts import TimeSeries, concatenate
+    from darts.dataprocessing.transformers import Scaler, Mapper, InvertibleMapper
+    from darts.models import KalmanForecaster, LinearRegressionModel
+    from darts.models.filtering.kalman_filter import KalmanFilter
+    from darts.utils.timeseries_generation import datetime_attribute_timeseries
+    from darts.metrics import smape, mape, rmse, r2_score, mase, mae
+    from sklearn.metrics import mean_absolute_error
+    from sklego.preprocessing import RepeatingBasisFunction
+
+    import warnings
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
+    from statsmodels.tools.sm_exceptions import ValueWarning
+    
+    warnings.filterwarnings('ignore', category=ValueWarning)
+    warnings.filterwarnings('ignore', category=FutureWarning, module='statsmodels')
+    warnings.filterwarnings('ignore', message="No supported index is available")
+    warnings.filterwarnings('ignore', message="A date index has been provided, but it has no associated frequency")
+    
+    from statsmodels.tools.sm_exceptions import ConvergenceWarning
+    from statsmodels.tsa.stattools import acf, adfuller
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='statsmodels.tsa.holtwinters')
+    from darts import TimeSeries
+    from darts.metrics import mae
+    import scipy.stats as st
+    from sklearn.preprocessing import StandardScaler
+    import concurrent.futures
+    
+    from mapie.regression import SplitConformalRegressor
+    from mapie.utils import train_conformalize_test_split
+
+    #import cupy as cp # not supported on my mac
+    from datetime import datetime, timedelta
+    import math
+    from scipy import stats
+    from scipy.stats import skew, kurtosis, entropy, shapiro, kstest
+    import random
+    from scipy.stats import spearmanr, poisson, nbinom # gaussian_kde, norm, expon, lognorm, exponweib, weibull_min, gamma
+    import sys
+    import time
+    import os
+    import calendar
+    import gc
+    import ast
+    from weekly_features_for_daily_forecasts import features_w_14_all, features_prev_M_all, features_prev_6M_all
+    
+        
+            
+    
+    import optuna
+    from optuna.pruners import HyperbandPruner
+    import logging
+    
+    ENABLE_OPTUNA_PRINTS = False   # Set to True to see optimization progress
+    ENABLE_LGBM_PRINTS = False    # Set to True to see LightGBM training progress
+    
+    if not ENABLE_OPTUNA_PRINTS:
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    
+    
+    from optuna.samplers import TPESampler
+    from datetime import datetime
+
+    if df.empty:
         return None
 
     input_df.columns = [c.upper() for c in input_df.columns]
@@ -2881,7 +2895,19 @@ def forecast_partition(data_connector: DataConnector, context):
     context.upload_to_stage(results, "forecast.parquet",
                             write_function=lambda pdf, path: pdf.to_parquet(path, index=False))
 
-    return None
+    return results
+
+
+class ForecastUDTF:
+    """Class which is registered as a UDTF to run demand forecasting."""
+ 
+    def end_partition(self, df):
+        """End partition method which utilizes the train_partition_function."""
+        result_df = train_partition(df)
+        result_df = result_df.rename(columns={c+"_OUT" for c in ["ITEM_NUMBER_SITE","PERFORM_DATE","ACTUAL_DEMAND"]})
+        yield result_df
+
+
 def _sanitize_col(c):
     return _re.sub(r'[^A-Za-z0-9_]', '', c).upper()
 
@@ -2891,7 +2917,7 @@ def get_train_version() -> str:
 
 
 def prepare_data(session: Session):
-    """Join demand data with item selection, stage partitioned by ITEM_NUMBER_SITE."""
+    """Join demand data with item selection, save as FORECAST_INPUT_WEEKLY."""
     connect_cfg = utils.get_connection_config()
     feat_cfg = utils.get_feature_config()
 
@@ -2922,38 +2948,72 @@ def prepare_data(session: Session):
     print(f"Preparing data: {partition_count:,} partitions, {row_count:,} rows")
 
     forecast_input.write.mode("overwrite").save_as_table("FORECAST_INPUT_WEEKLY")
-    stage_data_partitioned(session, "FORECAST_INPUT_WEEKLY", "forecast_weekly", partition_col="ITEM_NUMBER_SITE")
 
-    return partition_count
+    return session.table("FORECAST_INPUT_WEEKLY")
 
 
-def execute_training(session: Session, run_id: str):
-    """Run ManyModelTraining to forecast all partitions on SPCS."""
+def execute_training(session: Session, run_id: str, forecast_input: sp.DataFrame):
+    """Register UDTF and run distributed forecast across all partitions on warehouse."""
 
-    stage_path = get_stage_path()
-    trainer = ManyModelTraining(
-        train_func=forecast_partition,
-        stage_name=stage_path.replace("@", ""),
-        serde=PickleSerde(),
+    input_cols = [c for c in forecast_input.columns if c not in [TIME, GRAIN]]
+
+    vect_udtf_input_dtypes = [
+        T.PandasDataFrameType(
+            [
+                field.datatype
+                for field in forecast_input.schema.fields
+                if field.name in input_cols
+            ]
+        )
+    ]
+
+    udtf_name = f"FORECAST_UDTF_{run_id}"
+    session.udtf.register(
+        ForecastUDTF,
+        name=udtf_name,
+        input_types=vect_udtf_input_dtypes,
+        output_schema=T.PandasDataFrameType(
+            [T.StringType(), T.TimestampType(T.TimestampTimeZone.NTZ), T.LongType(),
+             T.LongType(), T.LongType(), T.LongType(),
+             T.LongType(), T.LongType()],
+            ["ITEM_NUMBER_SITE_OUT", "PERFORM_DATE_OUT", "ACTUAL_DEMAND_OUT",
+             "YEAR", "MONTH", "WEEK",
+             "FORECASTED_DEMAND_INF", "FORECASTED_DEMAND_SUP"],
+        ),
+        packages=[
+            "snowflake-snowpark-python",
+            "pandas",
+            "numpy",
+            "lightgbm",
+            "scikit-learn",
+            "scipy",
+            "statsmodels",
+            "darts",
+            "tsfresh",
+            "optuna",
+            "mapie",
+            "scikit-lego",
+        ],
+        artifact_repository="snowflake.snowpark.pypi_shared_repository",
+        replace=True,
+        is_permanent=False,
     )
 
-    train_run = trainer.run_from_stage(
-        stage_location=f"{stage_path}/forecast_weekly/",
-        run_id=run_id,
-        file_pattern="*.parquet",
-        on_existing_artifacts="overwrite",
+    results = forecast_input.select(
+        GRAIN,
+        TIME,
+        *[F.col(c) for c in input_cols],
+        F.call_table_function(udtf_name, *input_cols).over(
+            partition_by=[GRAIN],
+            order_by=TIME,
+        ),
     )
 
-    status = train_run.wait()
-    print(f"Training status: {status}")
-    #return status
-    import subprocess, sys
-    res = subprocess.run(["pip", "list"], capture_output=True, text=True)
-    print("tsfresh:", str("tsfresh" in res.stdout))
+    return results
 
 
-def collect_forecasts(session: Session, run_id: str):
-    """Load forecast parquet files from stage into WEEKLY_FORECASTS table."""
+def collect_forecasts(session: Session, results: sp.DataFrame):
+    """Write UDTF forecast results into WEEKLY_FORECASTS table."""
     session.sql("""
         CREATE TABLE IF NOT EXISTS WEEKLY_FORECASTS (
             ITEM_NUMBER_SITE VARCHAR,
@@ -2966,31 +3026,20 @@ def collect_forecasts(session: Session, run_id: str):
             FORECASTED_DEMAND_SUP NUMBER
         );
     """).collect()
-    copy_from_stage_to_table(
-        session, "WEEKLY_FORECASTS", f"{run_id}/forecast_weekly",
-        pattern=".*forecast[.]parquet", truncate_first=True,
+
+    forecast_cols = results.select(
+        "ITEM_NUMBER_SITE", "PERFORM_DATE", "ACTUAL_DEMAND",
+        "YEAR", "MONTH", "WEEK",
+        "FORECASTED_DEMAND_INF", "FORECASTED_DEMAND_SUP",
     )
+    forecast_cols.write.mode("overwrite").save_as_table("WEEKLY_FORECASTS")
+
     row_count = session.table("WEEKLY_FORECASTS").count()
     print(f"Collected {row_count:,} forecast rows into WEEKLY_FORECASTS")
 
 
-def collect_metrics(session: Session, run_id: str):
-    """Load metrics parquet files from stage into FORECAST_METRICS table."""
-    session.sql("""
-        CREATE TABLE IF NOT EXISTS FORECAST_METRICS (
-            PARTITION_ID VARCHAR,
-            ITEM_NUMBER_SITE VARCHAR,
-            FORECAST_ROWS NUMBER
-        );
-    """).collect()
-    copy_from_stage_to_table(
-        session, "FORECAST_METRICS", f"{run_id}/forecast_weekly",
-        pattern=".*metrics[.]parquet", truncate_first=True,
-    )
-
-
 def run_forecasting(session: Session = None) -> str:
-    """Entry point: prepare data, run distributed forecast, collect results."""
+    """Entry point: prepare data, run distributed forecast via UDTF, collect results."""
     train_version = get_train_version()
     run_id = f"forecast_{train_version}"
 
@@ -3000,10 +3049,9 @@ def run_forecasting(session: Session = None) -> str:
     else:
         session.sql(f"ALTER SESSION SET QUERY_TAG = '{run_id}'").collect()
 
-    prepare_data(session)
-    execute_training(session, run_id)
-    collect_forecasts(session, run_id)
-    collect_metrics(session, run_id)
+    forecast_input = prepare_data(session)
+    results = execute_training(session, run_id, forecast_input)
+    collect_forecasts(session, results)
 
     return run_id
 
