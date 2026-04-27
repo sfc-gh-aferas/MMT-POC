@@ -93,9 +93,6 @@ import scipy.stats as st
 from sklearn.preprocessing import StandardScaler
 import concurrent.futures
 
-from mapie.regression import SplitConformalRegressor
-from mapie.utils import train_conformalize_test_split
-
 # imports not used
 # import xlsxwriter
 # from openpyxl import load_workbook
@@ -115,18 +112,18 @@ from sklearn.metrics import mean_absolute_error
 from sklego.preprocessing import RepeatingBasisFunction
 
 
-import optuna
-from optuna.pruners import HyperbandPruner
+#import optuna
+#from optuna.pruners import HyperbandPruner
 import logging
 
 ENABLE_OPTUNA_PRINTS = False   # Set to True to see optimization progress
 ENABLE_LGBM_PRINTS = False    # Set to True to see LightGBM training progress
 
-if not ENABLE_OPTUNA_PRINTS:
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
+#if not ENABLE_OPTUNA_PRINTS:
+  #  optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
-from optuna.samplers import TPESampler
+#from optuna.samplers import TPESampler
 
 from datetime import datetime
 
@@ -1600,10 +1597,10 @@ item_cnt = 0
 
 def forecast_partition(data_connector: DataConnector, context):
     """MMT worker: run weekly demand forecast for one partition (item), upload results to stage."""
+
     import pandas as pd
     import numpy as np
     import gc
-    from datetime import timedelta
 
     input_df = data_connector.to_pandas()
     if input_df.empty:
@@ -2920,6 +2917,7 @@ def prepare_data(session: Session):
 
 def execute_training(session: Session, run_id: str):
     """Run ManyModelTraining to forecast all partitions on SPCS."""
+
     stage_path = get_stage_path()
     trainer = ManyModelTraining(
         train_func=forecast_partition,
@@ -2936,7 +2934,10 @@ def execute_training(session: Session, run_id: str):
 
     status = train_run.wait()
     print(f"Training status: {status}")
-    return status
+    #return status
+    import subprocess, sys
+    res = subprocess.run(["pip", "list"], capture_output=True, text=True)
+    print("tsfresh:", str("tsfresh" in res.stdout))
 
 
 def collect_forecasts(session: Session, run_id: str):

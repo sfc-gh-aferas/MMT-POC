@@ -35,6 +35,7 @@ def train_partition(data_connector: DataConnector, context):
     import json
     from datetime import datetime
     from xgboost import XGBRegressor
+    import tsfresh
     
     df = data_connector.to_pandas()
 
