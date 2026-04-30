@@ -29,6 +29,17 @@ from utils import (
     get_fully_qualified_name,
 )
 
+from scipy import stats
+from scipy.stats import skew, kurtosis, entropy, shapiro, kstest
+import random
+from scipy.stats import spearmanr, poisson, nbinom
+import lightgbm as lgb
+from sklearn.metrics import mean_absolute_error
+
+ENABLE_OPTUNA_PRINTS = False   # Set to True to see optimization progress
+ENABLE_LGBM_PRINTS = False    # Set to True to see LightGBM training progress
+    
+
 import re as _re
 
 # === DETERMINISTIC BEHAVIOR SETUP ===
@@ -36,40 +47,6 @@ import re as _re
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 random.seed(RANDOM_SEED)
-
-# Set CUDA path if not already set - adjust path as needed for your system
-if 'CUDA_PATH' not in os.environ:
-    # Try to auto-detect CUDA installation
-    cuda_paths = [
-        # Standard NVIDIA CUDA Toolkit installations
-        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8',
-        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6', 
-        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4',
-        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8',
-        # CuPy bundled CUDA (pip/conda installations)
-        r'C:\Users\ffr\python311\Lib\site-packages\cupy',
-        # Generic patterns for different user installations
-        os.path.expanduser(r'~\python311\Lib\site-packages\cupy'),
-        os.path.expanduser(r'~\AppData\Local\Programs\Python\Python311\Lib\site-packages\cupy'),
-    ]
-    
-    # Also try to detect from CuPy itself
-    try:
-        import cupy as cp_detect
-        cupy_path = os.path.dirname(cp_detect.__file__)
-        cuda_paths.insert(0, cupy_path)  # Prioritize detected CuPy path
-        print(f"Detected CuPy installation at: {cupy_path}")
-    except ImportError:
-        pass
-    
-    for path in cuda_paths:
-        if os.path.exists(path):
-            os.environ['CUDA_PATH'] = path
-            print(f"Auto-detected CUDA path: {path}")
-            break
-    else:
-        print("No CUDA path auto-detected - CuPy will try default detection")
-
 
 
 # imports not used
@@ -82,6 +59,416 @@ feature_cfg = get_feature_config()
 GRAIN = "ITEM_NUMBER_SITE"
 TARGET = "ACTUAL_DEMAND"
 TIME = "PERFORM_DATE"
+
+features_w_14_all = [
+    'ACTUAL_DEMAND__abs_energy',
+    'ACTUAL_DEMAND__absolute_maximum',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"mean"__maxlag_40"',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"median"__maxlag_40"',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"var"__maxlag_40',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"var"__maxlag_40"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_50__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_50__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_50__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__ar_coefficient__coeff_0__k_10',
+    'ACTUAL_DEMAND__ar_coefficient__coeff_1__k_10',
+    'ACTUAL_DEMAND__ar_coefficient__coeff_3__k_10',
+    'ACTUAL_DEMAND__ar_coefficient__coeff_4__k_10',
+    'ACTUAL_DEMAND__binned_entropy__max_bins_10',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.6"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.8"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_True__qh_0.6__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_True__qh_0.6__ql_0.2',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"var"__isabs_False__qh_0.6__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"var"__isabs_False__qh_0.6__ql_0.2',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"var"__isabs_True__qh_0.6__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"var"__isabs_True__qh_0.6__ql_0.2',
+    'ACTUAL_DEMAND__cid_ce__normalize_True',
+    'ACTUAL_DEMAND__count_above_mean',
+    'ACTUAL_DEMAND__count_below__t_0',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_0__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_10__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_10__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_10__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_11__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_11__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_11__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_11__w_5__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_12__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_12__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_12__w_5__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_13__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_13__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_13__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_13__w_5__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_14__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_14__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_14__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_14__w_5__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_1__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_2__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_3__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_4__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_6__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_7__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_7__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_8__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_8__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_8__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_9__w_10__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_9__w_20__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_9__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__energy_ratio_by_chunks__num_segments_10__segment_focus_6',
+    'ACTUAL_DEMAND__energy_ratio_by_chunks__num_segments_10__segment_focus_9',
+    'ACTUAL_DEMAND__fft_aggregated__aggtype_"centroid"',
+    'ACTUAL_DEMAND__fft_aggregated__aggtype_"kurtosis"',
+    'ACTUAL_DEMAND__fft_aggregated__aggtype_"skew"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_0',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_0"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_1"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_14"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_15"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_2',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_2"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_3"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_4"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_8"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"abs"__coeff_9"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_10"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_11"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_12"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_13"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_14"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_16"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_17"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_22"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_24"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_25"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_27"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_5"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_6"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_7"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_8"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_9"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_10"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_11"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_12"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_13"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_14"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_15"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_16"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_17"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_18"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_19"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_22"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_23"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_24"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_25"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_3',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_3"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_4',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_4"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_5"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_6',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_6"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_7"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_8"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_9"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_0',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_0"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_1',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_1"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_11"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_12"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_13"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_14"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_15"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_16"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_2',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_2"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_26"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_27"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_28"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_29"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_3"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_30"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_31"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_4',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_4"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_5"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_6"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_7',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_7"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_8"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_9"',
+    'ACTUAL_DEMAND__first_location_of_maximum',
+    'ACTUAL_DEMAND__first_location_of_minimum',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.4',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.6',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.7',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.8',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.9',
+    'ACTUAL_DEMAND__large_standard_deviation__r_0.25',
+    'ACTUAL_DEMAND__large_standard_deviation__r_0.30000000000000004',
+    'ACTUAL_DEMAND__last_location_of_maximum',
+    'ACTUAL_DEMAND__last_location_of_minimum',
+    'ACTUAL_DEMAND__lempel_ziv_complexity__bins_10',
+    'ACTUAL_DEMAND__lempel_ziv_complexity__bins_100',
+    'ACTUAL_DEMAND__lempel_ziv_complexity__bins_2',
+    'ACTUAL_DEMAND__lempel_ziv_complexity__bins_3',
+    'ACTUAL_DEMAND__lempel_ziv_complexity__bins_5',
+    'ACTUAL_DEMAND__linear_trend__attr_"intercept"',
+    'ACTUAL_DEMAND__linear_trend__attr_"rvalue"',
+    'ACTUAL_DEMAND__linear_trend__attr_"slope"',
+    'ACTUAL_DEMAND__maximum',
+    'ACTUAL_DEMAND__mean',
+    'ACTUAL_DEMAND__mean_change',
+    'ACTUAL_DEMAND__mean_n_absolute_max__number_of_maxima_7',
+    'ACTUAL_DEMAND__mean_second_derivative_central',
+    'ACTUAL_DEMAND__number_cwt_peaks__n_5',
+    'ACTUAL_DEMAND__number_peaks__n_1',
+    'ACTUAL_DEMAND__quantile__q_0.3',
+    'ACTUAL_DEMAND__quantile__q_0.4',
+    'ACTUAL_DEMAND__quantile__q_0.6',
+    'ACTUAL_DEMAND__quantile__q_0.7',
+    'ACTUAL_DEMAND__quantile__q_0.8',
+    'ACTUAL_DEMAND__quantile__q_0.9',
+    'ACTUAL_DEMAND__ratio_beyond_r_sigma__r_1',
+    'ACTUAL_DEMAND__ratio_beyond_r_sigma__r_1.5',
+    'ACTUAL_DEMAND__ratio_beyond_r_sigma__r_2',
+    'ACTUAL_DEMAND__ratio_value_number_to_time_series_length',
+    'ACTUAL_DEMAND__root_mean_square',
+    'ACTUAL_DEMAND__standard_deviation',
+    'ACTUAL_DEMAND__sum_values',
+    'ACTUAL_DEMAND__symmetry_looking__r_0.1',
+    'ACTUAL_DEMAND__symmetry_looking__r_0.15000000000000002',
+    'ACTUAL_DEMAND__variance',
+    'ACTUAL_DEMAND__variation_coefficient',
+]
+
+features_prev_M_all = [
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"mean"__maxlag_40',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"var"__maxlag_40',
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"var"__maxlag_40"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"max"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_50__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__augmented_dickey_fuller__attr_"pvalue"__autolag_"AIC"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.6"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.8"',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_0__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_10__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_11__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_12__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_14__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_3__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_4__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_5__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_7__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_8__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_9__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__energy_ratio_by_chunks__num_segments_10__segment_focus_9',
+    'ACTUAL_DEMAND__fft_aggregated__aggtype_"skew"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_27"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_49"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_52"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_53"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_54"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_73"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_78"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_80"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_9',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_97"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_98"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_26"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_27"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_28"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_29"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_45"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_46"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_47"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_48"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_49"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_5',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_6',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_7',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_71"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_72"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_73"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_74"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_77"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_8',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_80"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_9',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_94"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_95"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_96"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_14',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_15',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_23"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_24"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_47"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_48"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_49"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_50"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_51"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_52"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_53"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_54"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_55"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_56"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_57"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_6"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_80"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_94"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_95"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_97"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_98"',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.7',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.8',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.9',
+    'ACTUAL_DEMAND__last_location_of_minimum',
+    'ACTUAL_DEMAND__mean_change',
+    'ACTUAL_DEMAND__mean_second_derivative_central',
+]
+
+features_prev_6M_all = [
+    'ACTUAL_DEMAND__agg_autocorrelation__f_agg_"var"__maxlag_40"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"intercept"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"rvalue"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_10__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_50__f_agg_"var"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"slope"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"mean"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_10__f_agg_"min"',
+    'ACTUAL_DEMAND__agg_linear_trend__attr_"stderr"__chunk_len_5__f_agg_"min"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.0"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.2"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.4"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.6"',
+    'ACTUAL_DEMAND__change_quantiles__f_agg_"mean"__isabs_False__qh_1.0__ql_0.8"',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_0__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_12__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_2__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_5__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_8__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__cwt_coefficients__coeff_9__w_2__widths_(2, 5, 10, 20)',
+    'ACTUAL_DEMAND__energy_ratio_by_chunks__num_segments_10__segment_focus_9',
+    'ACTUAL_DEMAND__fft_aggregated__aggtype_"skew"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_52"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_97"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"angle"__coeff_98"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_26',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_27',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_28',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_52"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_53',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_93"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_94"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_95"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_96"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"imag"__coeff_97"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_47"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_48"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_49"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_52',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_52"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_53',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_53"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_54',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_54"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_55',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_94"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_95"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_96"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_97"',
+    'ACTUAL_DEMAND__fft_coefficient__attr_"real"__coeff_98"',
+    'ACTUAL_DEMAND__first_location_of_minimum',
+    'ACTUAL_DEMAND__index_mass_quantile__q_0.9',
+    'ACTUAL_DEMAND__last_location_of_minimum',
+    'ACTUAL_DEMAND__mean_change',
+    'ACTUAL_DEMAND__mean_second_derivative_central',
+]
+
 
 def detect_structural_breaks(demand_data, date_col='PERFORM_DATE', demand_col='ACTUAL_DEMAND', 
                            min_break_size=90, cusum_threshold=2.5, variance_threshold=0.7):
@@ -560,54 +947,14 @@ def build_fit_weekly_LGBMRegressor(
                 return np.zeros(n)
         return _ZeroPredictor()
     
-    try:
-        import cupy as cp
-        # Test CuPy functionality before proceeding
-        try:
-            test_array = cp.array([1, 2, 3])
-            test_result = test_array.get()  # This will fail if CUDA setup is broken
-            print(f"CuPy test successful: {test_result}")
-        except Exception as cuda_test_error:
-            print(f"CuPy available but CUDA runtime issue: {cuda_test_error}")
-            raise RuntimeError("CUDA runtime test failed")
-            
-        # Convert to CuPy for memory efficiency, then back to NumPy for LightGBM sklearn interface
-        if hasattr(X_full, 'values'):
-            X_gpu = cp.asarray(X_full.values)
-        else:
-            X_gpu = cp.asarray(X_full)
-            
-        if hasattr(y_full, 'values'):
-            y_gpu = cp.asarray(y_full.values)
-        else:
-            y_gpu = cp.asarray(y_full)
-        
-        print(f"GPU zero-copy: X shape {X_gpu.shape}, y shape {y_gpu.shape}")
-        
-        # Convert back to NumPy for sklearn interface - LightGBM will handle GPU internally
-        X_numpy = X_gpu.get()
-        y_numpy = y_gpu.get()
-        
-        model.fit(
-            X_numpy, y_numpy,
-            eval_metric="mae",
-            callbacks=[
-            lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-            ]
-        )
-    except (ImportError, RuntimeError) as e:
-        if "CUDA" in str(e):
-            print(f"CUDA configuration issue: {e}")
-            print("Falling back to CPU arrays - LightGBM will still use GPU via device='gpu'")
-        else:
-            print("CuPy not available, falling back to CPU arrays")
-        model.fit(
-            X_full, y_full,
-            eval_metric="mae",
-            callbacks=[
-            lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-            ]
-        )
+    assert X_full.shape[0] == len(y_full), f"Shape mismatch: X={X_full.shape[0]}, y={len(y_full)}"
+    model.fit(
+        X_full, y_full,
+        eval_metric="mae",
+        callbacks=[
+        lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
+        ]
+    )
     
     return model
 
@@ -642,83 +989,21 @@ def objective_weekly_LGBM_with_weight(trial, X_train, y_train, X_val, y_val, wgt
         train_weights = np.where(y_train > 0, wgt, 1)
         val_weights = np.where(y_val > 0, wgt, 1)
 
-        try:
-            # Test CuPy functionality first with better error handling
-            try:
-                test_array = cp.array([1, 2, 3])
-                test_result = test_array.get()
-                # If we get here, CuPy is working properly
-            except Exception as cuda_test_error:
-                if "CUDA root directory" in str(cuda_test_error):
-                    # This is the specific CUDA path issue - use fallback silently
-                    raise RuntimeError("CUDA path detection failed - using CPU fallback")
-                else:
-                    raise cuda_test_error
-            
-            if hasattr(X_train, 'values'):
-                X_train_gpu = cp.asarray(X_train.values)
-            else:
-                X_train_gpu = cp.asarray(X_train)
-                
-            if hasattr(y_train, 'values'):
-                y_train_gpu = cp.asarray(y_train.values)
-            else:
-                y_train_gpu = cp.asarray(y_train)
-            
-            if hasattr(X_val, 'values'):
-                X_val_gpu = cp.asarray(X_val.values)
-            else:
-                X_val_gpu = cp.asarray(X_val)
-                
-            if hasattr(y_val, 'values'):
-                y_val_gpu = cp.asarray(y_val.values)
-            else:
-                y_val_gpu = cp.asarray(y_val)
-            
-            train_weights_gpu = cp.asarray(train_weights)
-            val_weights_gpu = cp.asarray(val_weights)
-            
-            # Convert all arrays to NumPy for LightGBM sklearn interface
-            X_train_numpy = X_train_gpu.get()
-            y_train_numpy = y_train_gpu.get()
-            X_val_numpy = X_val_gpu.get()
-            y_val_numpy = y_val_gpu.get()
-            train_weights_numpy = train_weights_gpu.get()
-            val_weights_numpy = val_weights_gpu.get()
-            
-            model = lgb.LGBMRegressor(**param)
-            model.fit(
-                X_train_numpy, y_train_numpy,
-                sample_weight=train_weights_numpy,
-                eval_set=[(X_val_numpy, y_val_numpy)],
-                eval_sample_weight=[val_weights_numpy],
-                eval_metric="mae",
-                verbose=False,
-                callbacks=[
-                lgb.early_stopping(stopping_rounds=30),
-                lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-                ]
-            )
-            preds = model.predict(X_val_numpy)
-            mae = mean_absolute_error(y_val_numpy, preds, sample_weight=val_weights_numpy)
-            
-        except (ImportError, RuntimeError) as e:
-            # Silently fall back to CPU - LightGBM will still use GPU internally
-            model = lgb.LGBMRegressor(**param)
-            model.fit(
-                X_train, y_train,
-                sample_weight=train_weights,
-                eval_set=[(X_val, y_val)],
-                eval_sample_weight=[val_weights],
-                eval_metric="mae",
-                verbose=False,
-                callbacks=[
-                lgb.early_stopping(stopping_rounds=30),
-                lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-                ]
-            )
-            preds = model.predict(X_val)
-            mae = mean_absolute_error(y_val, preds, sample_weight=val_weights)
+        model = lgb.LGBMRegressor(**param)
+        model.fit(
+            X_train, y_train,
+            sample_weight=train_weights,
+            eval_set=[(X_val, y_val)],
+            eval_sample_weight=[val_weights],
+            eval_metric="mae",
+            verbose=False,
+            callbacks=[
+            lgb.early_stopping(stopping_rounds=30),
+            lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
+            ]
+        )
+        preds = model.predict(X_val)
+        mae = mean_absolute_error(y_val, preds, sample_weight=val_weights)
             
         return mae
     except Exception as e:
@@ -822,53 +1107,13 @@ def build_fit_less_than_weekly_LGBMRegressor(
                 return np.zeros(n)
         return _ZeroPredictor()
     
-    try:
-        import cupy as cp
-        # Test CuPy functionality before proceeding
-        try:
-            test_array = cp.array([1, 2, 3])
-            test_result = test_array.get()
-            print(f"CuPy test successful for less-than-weekly: {test_result}")
-        except Exception as cuda_test_error:
-            print(f"CuPy available but CUDA runtime issue: {cuda_test_error}")
-            raise RuntimeError("CUDA runtime test failed")
-            
-        if hasattr(X_full, 'values'):  # pandas DataFrame
-            X_gpu = cp.asarray(X_full.values)
-        else:
-            X_gpu = cp.asarray(X_full)
-            
-        if hasattr(y_full, 'values'):
-            y_gpu = cp.asarray(y_full.values)
-        else:
-            y_gpu = cp.asarray(y_full)
-        
-        print(f"GPU zero-copy (less-than-weekly): X shape {X_gpu.shape}, y shape {y_gpu.shape}")
-        
-        # Convert back to NumPy for sklearn interface - LightGBM will handle GPU internally
-        X_numpy = X_gpu.get()
-        y_numpy = y_gpu.get()
-        
-        model.fit(
-            X_numpy, y_numpy,
-            eval_metric="mae",
-            callbacks=[
-            lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-            ]
-        )
-    except (ImportError, RuntimeError) as e:
-        if "CUDA" in str(e):
-            print(f"CUDA configuration issue: {e}")
-            print("Falling back to CPU arrays - LightGBM will still use GPU via device='gpu'")
-        else:
-            print("CuPy not available, falling back to CPU arrays")
-        model.fit(
-            X_full, y_full,
-            eval_metric="mae",
-            callbacks=[
-            lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
-            ]
-        )
+    model.fit(
+        X_full, y_full,
+        eval_metric="mae",
+        callbacks=[
+        lgb.log_evaluation(period=0 if ENABLE_LGBM_PRINTS else -1)
+        ]
+    )
         
     return model
 
@@ -904,82 +1149,21 @@ def objective_less_than_weekly_LGBM_with_weight(trial, X_train, y_train, X_val, 
         train_weights = np.where(y_train > 0, wgt, 1)
         val_weights = np.where(y_val > 0, wgt, 1)
         
-        try:
-            # Test CuPy functionality first with better error handling
-            try:
-                test_array = cp.array([1, 2, 3])
-                test_result = test_array.get()
-                # If we get here, CuPy is working properly
-            except Exception as cuda_test_error:
-                if "CUDA root directory" in str(cuda_test_error):
-                    # This is the specific CUDA path issue - use fallback silently
-                    raise RuntimeError("CUDA path detection failed - using CPU fallback")
-                else:
-                    raise cuda_test_error
-            
-            if hasattr(X_train, 'values'):
-                X_train_gpu = cp.asarray(X_train.values)
-            else:
-                X_train_gpu = cp.asarray(X_train)
-                
-            if hasattr(y_train, 'values'):
-                y_train_gpu = cp.asarray(y_train.values)
-            else:
-                y_train_gpu = cp.asarray(y_train)
-            
-            if hasattr(X_val, 'values'):
-                X_val_gpu = cp.asarray(X_val.values)
-            else:
-                X_val_gpu = cp.asarray(X_val)
-                
-            if hasattr(y_val, 'values'):
-                y_val_gpu = cp.asarray(y_val.values)
-            else:
-                y_val_gpu = cp.asarray(y_val)
-            
-            train_weights_gpu = cp.asarray(train_weights)
-            val_weights_gpu = cp.asarray(val_weights)
-            
-            X_train_numpy = X_train_gpu.get()
-            y_train_numpy = y_train_gpu.get()
-            X_val_numpy = X_val_gpu.get()
-            y_val_numpy = y_val_gpu.get()
-            train_weights_numpy = train_weights_gpu.get()
-            val_weights_numpy = val_weights_gpu.get()
-            
-            model = lgb.LGBMRegressor(**param)
-            model.fit(
-                X_train_numpy, y_train_numpy, 
-                sample_weight=train_weights_numpy,
-                eval_set=[(X_val_numpy, y_val_numpy)],
-                eval_sample_weight=[val_weights_numpy],
-                eval_metric="mae",
-                verbose=False,
-                callbacks=[
-                lgb.early_stopping(stopping_rounds=30),
-                lgb.log_evaluation(period=100 if ENABLE_LGBM_PRINTS else -1)
-                ]
-            )
-            preds = model.predict(X_val_numpy)
-            mae = mean_absolute_error(y_val_numpy, preds, sample_weight=val_weights_numpy)
-            
-        except (ImportError, RuntimeError) as e:
-            # Silently fall back to CPU - LightGBM will still use GPU internally
-            model = lgb.LGBMRegressor(**param)
-            model.fit(
-                X_train, y_train,
-                sample_weight=train_weights,
-                eval_set=[(X_val, y_val)],
-                eval_sample_weight=[val_weights],
-                eval_metric="mae",
-                verbose=False,
-                callbacks=[
-                lgb.early_stopping(stopping_rounds=30),
-                lgb.log_evaluation(period=100 if ENABLE_LGBM_PRINTS else -1)
-                ]
-            )
-            preds = model.predict(X_val)
-            mae = mean_absolute_error(y_val, preds, sample_weight=val_weights)
+        model = lgb.LGBMRegressor(**param)
+        model.fit(
+            X_train, y_train,
+            sample_weight=train_weights,
+            eval_set=[(X_val, y_val)],
+            eval_sample_weight=[val_weights],
+            eval_metric="mae",
+            verbose=False,
+            callbacks=[
+            lgb.early_stopping(stopping_rounds=30),
+            lgb.log_evaluation(period=100 if ENABLE_LGBM_PRINTS else -1)
+            ]
+        )
+        preds = model.predict(X_val)
+        mae = mean_absolute_error(y_val, preds, sample_weight=val_weights)
             
         return mae
 
@@ -1551,8 +1735,6 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     import numpy as np
     import gc
 
-    import lightgbm as lgb
-
     from tsfresh import extract_features, extract_relevant_features, select_features
     from tsfresh.utilities.dataframe_functions import impute, roll_time_series
     
@@ -1562,7 +1744,6 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     from darts.models.filtering.kalman_filter import KalmanFilter
     from darts.utils.timeseries_generation import datetime_attribute_timeseries
     from darts.metrics import smape, mape, rmse, r2_score, mase, mae
-    from sklearn.metrics import mean_absolute_error
     from sklego.preprocessing import RepeatingBasisFunction
 
     import warnings
@@ -1587,7 +1768,6 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     from mapie.regression import SplitConformalRegressor
     from mapie.utils import train_conformalize_test_split
 
-    #import cupy as cp # not supported on my mac
     from datetime import datetime, timedelta
     import math
     from scipy import stats
@@ -1600,17 +1780,10 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     import calendar
     import gc
     import ast
-    from weekly_features_for_daily_forecasts import features_w_14_all, features_prev_M_all, features_prev_6M_all
-    
-        
-            
     
     import optuna
     from optuna.pruners import HyperbandPruner
     import logging
-    
-    ENABLE_OPTUNA_PRINTS = False   # Set to True to see optimization progress
-    ENABLE_LGBM_PRINTS = False    # Set to True to see LightGBM training progress
     
     if not ENABLE_OPTUNA_PRINTS:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -1622,22 +1795,24 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return None
 
-    input_df.columns = [c.upper() for c in input_df.columns]
-    input_df['PERFORM_DATE'] = pd.to_datetime(input_df['PERFORM_DATE'], format=ts_format, utc=True).dt.tz_localize(None)
-    for col in input_df.select_dtypes(include=["object"]).columns:
+    df.columns = INPUT_COLS
+
+    df['PERFORM_DATE'] = pd.to_datetime(df['PERFORM_DATE']).astype('datetime64[ns]')
+    for col in df.select_dtypes(include=["object"]).columns:
         if col == "PERFORM_DATE":
             continue
         try:
-            input_df[col] = pd.to_numeric(input_df[col], errors="ignore")
+            df[col] = pd.to_numeric(df[col], errors="ignore")
         except (ValueError, TypeError):
             pass
-    numeric_cols = input_df.select_dtypes(include=["number"]).columns
-    input_df[numeric_cols] = input_df[numeric_cols].astype("float64")
-    input_df = input_df.sort_values("PERFORM_DATE").reset_index(drop=True)
-    actual_category = input_df['PURCHASE_CYCLE_CATEGORY'].iloc[0]
-    item_id = input_df['ITEM_NUMBER_SITE'].iloc[0]
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    df[numeric_cols] = df[numeric_cols].astype("float64")
+
+    df = df.sort_values("PERFORM_DATE").reset_index(drop=True)
+    actual_category = df['PURCHASE_CYCLE_CATEGORY'].iloc[0]
+    item_id = df['ITEM_NUMBER_SITE'].iloc[0]
     print(f"Processing item {item_id} with category: {actual_category}")
-    demand_item_fct = input_df.copy()
+    demand_item_fct = df.copy()
         
     # Initialize variables to avoid NameError issues
     monthly_forecast_max = 0  # Will be properly set in monthly processing, default to 0 for weekly items
@@ -2104,13 +2279,13 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                 next_days = next_days.rename(columns = {0:'PERFORM_DATE'})
                 demand_X.drop(columns=['YEAR','MONTH','DaysInMonth','EffectiveNbDays'], inplace=True, errors='ignore')            
                 
-                df = demand_X[['PERFORM_DATE',demand_col]].copy()
-                df['PERFORM_DATE'] = df['PERFORM_DATE'].apply(str)
-                df['Duplic'] = demand_col
+                roll_df = demand_X[['PERFORM_DATE',demand_col]].copy()
+                #df['PERFORM_DATE'] = df['PERFORM_DATE'].apply(str)
+                roll_df['Duplic'] = demand_col
                 Tri = 'PERFORM_DATE'
                 nb_months = 1
                 max_nb_months = 12
-                while df[demand_col].iloc[-nb_months * simulation_period_days_prev:].nunique() == 1 and nb_months < max_nb_months:
+                while roll_df[demand_col].iloc[-nb_months * simulation_period_days_prev:].nunique() == 1 and nb_months < max_nb_months:
                     print(f"Validation period contains only identical values. Expanding to {nb_months + 1} months...")
                     nb_months += 1
                 print(f"nb_months :{nb_months}")
@@ -2228,7 +2403,7 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                 
                 feats = []
                 for max_timeshift, suffix, feature_settings in rolling_configs:
-                    rolled = roll_time_series(df, "Duplic", Tri, max_timeshift=max_timeshift, n_jobs=1)
+                    rolled = roll_time_series(roll_df, "Duplic", Tri, max_timeshift=max_timeshift, n_jobs=1)
                     feat = extract_features(
                         rolled.drop("Duplic", axis=1),
                         column_id="id",
@@ -2263,7 +2438,7 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                 
                 correlation_data = pd.merge(demand_y_select, feat, left_index=True, right_index=True, sort= False)
                 correlation_matrix = correlation_data.corr()
-                correlation_matrix = correlation_matrix.iloc[:,:1].squeeze()
+                correlation_matrix = correlation_matrix.iloc[:,:1].squeeze(axis=1)
                 selected_columns = correlation_matrix.abs().sort_values(ascending=False).index
                 selected_columns = selected_columns.drop(demand_col, errors='ignore')
                 selected_columns = selected_columns[:65]
@@ -2356,7 +2531,7 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
 
                 correlation_data = pd.merge(demand_y[demand_col], feat, left_index=True, right_index=True, sort= False)
                 correlation_matrix = correlation_data.corr()
-                correlation_matrix = correlation_matrix.iloc[:,:1].squeeze()
+                correlation_matrix = correlation_matrix.iloc[:,:1].squeeze(axis=1)
                 selected_columns = correlation_matrix.abs().sort_values(ascending=False).index
                 selected_columns = selected_columns.drop(demand_col, errors='ignore')
                 selected_columns = selected_columns[:75]
@@ -2377,7 +2552,7 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                     i, series, dim_x, horizon = args
                     model = KalmanForecaster(dim_x=dim_x)
                     model.fit(series=series)
-                    p = model.predict(horizon).to_dataframe().reset_index()
+                    p = model.predict(horizon).pd_dataframe().reset_index()
                     p[i] = series_names[i]
                     return i, p
 
@@ -2399,7 +2574,7 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                         for i, series in enumerate(feat_sc_next_days):
                             model = KalmanForecaster(dim_x=dim_x)
                             model.fit(series=series)
-                            p = model.predict(simulation_period_days).to_dataframe().reset_index()
+                            p = model.predict(simulation_period_days).pd_dataframe().reset_index()
                             p[i] = series_names[i]
                             temp_preds.append(p)
                         preds = temp_preds  # Only assign if all series processed successfully
@@ -2561,10 +2736,9 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
                 X_val = clean_feature_names(X_val)
                 X_test = clean_feature_names(X_test)
                     
-                y_val = y_train.merge(X_val.drop(X_val.columns, axis=1), left_index=True, right_index=True)
-                y_train = y_train.merge(X_train.drop(X_train.columns, axis=1), left_index=True, right_index=True)            
-                y_train = y_train.values.ravel()
-                y_val = y_val.values.ravel()                
+                y_all = y_train.copy()
+                y_val = y_all.reindex(X_val.index).values.ravel()
+                y_train = y_all.reindex(X_train.index).values.ravel()                
                 spearman_corrs = {}
                 for col in X_train.columns:
                     corr, _ = spearmanr(X_train[col], y_train)
@@ -2868,13 +3042,6 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
         all_last_years.append(last_year)             
         all_best_params.extend(weekly_best_params)
         try:
-            import cupy
-            cupy.get_default_memory_pool().free_all_blocks()
-            cupy.get_default_pinned_memory_pool().free_all_blocks()
-            print("GPU memory cleared")
-        except:
-            pass
-        try:
             del feat, demand_X, demand_y, feat_next_days
             del X_train, y_train, X_test, X_val
             del X_bt_train, X_bt_val, y_bt_train, y_bt_val
@@ -2885,17 +3052,8 @@ def forecast_partition(df: pd.DataFrame) -> pd.DataFrame:
         gc.collect()
     results = pd.concat(all_forecasts)[["ITEM_NUMBER_SITE","PERFORM_DATE","ACTUAL_DEMAND","YEAR","MONTH","WEEK","FORECASTED_DEMAND_INF","FORECASTED_DEMAND_SUP"]]
 
-    metrics_df = pd.DataFrame([{
-        "PARTITION_ID": context.partition_id.split('/')[1] if '/' in context.partition_id else context.partition_id,
-        "ITEM_NUMBER_SITE": item_id,
-        "FORECAST_ROWS": int(len(results)),
-    }])
-    context.upload_to_stage(metrics_df, "metrics.parquet",
-                            write_function=lambda pdf, path: pdf.to_parquet(path, index=False))
-    context.upload_to_stage(results, "forecast.parquet",
-                            write_function=lambda pdf, path: pdf.to_parquet(path, index=False))
-
     return results
+
 
 
 class ForecastUDTF:
@@ -2903,8 +3061,8 @@ class ForecastUDTF:
  
     def end_partition(self, df):
         """End partition method which utilizes the train_partition_function."""
-        result_df = train_partition(df)
-        result_df = result_df.rename(columns={c+"_OUT" for c in ["ITEM_NUMBER_SITE","PERFORM_DATE","ACTUAL_DEMAND"]})
+        result_df = forecast_partition(df)
+        result_df = result_df.rename(columns={c:c+"_OUT" for c in ["ITEM_NUMBER_SITE","PERFORM_DATE","ACTUAL_DEMAND"]})
         yield result_df
 
 
@@ -2954,15 +3112,16 @@ def prepare_data(session: Session):
 
 def execute_training(session: Session, run_id: str, forecast_input: sp.DataFrame):
     """Register UDTF and run distributed forecast across all partitions on warehouse."""
-
-    input_cols = [c for c in forecast_input.columns if c not in [TIME, GRAIN]]
+    global INPUT_COLS 
+    
+    INPUT_COLS = forecast_input.columns
 
     vect_udtf_input_dtypes = [
         T.PandasDataFrameType(
             [
                 field.datatype
                 for field in forecast_input.schema.fields
-                if field.name in input_cols
+                if field.name in INPUT_COLS
             ]
         )
     ]
@@ -2981,29 +3140,27 @@ def execute_training(session: Session, run_id: str, forecast_input: sp.DataFrame
              "FORECASTED_DEMAND_INF", "FORECASTED_DEMAND_SUP"],
         ),
         packages=[
-            "snowflake-snowpark-python",
-            "pandas",
-            "numpy",
-            "lightgbm",
-            "scikit-learn",
-            "scipy",
-            "statsmodels",
-            "darts",
-            "tsfresh",
-            "optuna",
-            "mapie",
-            "scikit-lego",
+            "pandas==2.3.2",
+            "scikit-learn==1.6.0",
+            "scikit-optimize==0.10.2",
+            "lightgbm==4.6.0",
+            "darts==0.31.0",
+            "statsmodels==0.14.5",
+            "tsfresh==0.21.0",
+            "scipy==1.15.3",
+            "mapie==1.1.0",
+            "scikit-lego==0.9.3",
+            "optuna==4.7.0",
         ],
         artifact_repository="snowflake.snowpark.pypi_shared_repository",
         replace=True,
         is_permanent=False,
+        resource_constraint={'architecture':'x86'}
     )
 
     results = forecast_input.select(
-        GRAIN,
-        TIME,
-        *[F.col(c) for c in input_cols],
-        F.call_table_function(udtf_name, *input_cols).over(
+        *INPUT_COLS,
+        F.call_table_function(udtf_name, *INPUT_COLS).over(
             partition_by=[GRAIN],
             order_by=TIME,
         ),
@@ -3050,8 +3207,12 @@ def run_forecasting(session: Session = None) -> str:
         session.sql(f"ALTER SESSION SET QUERY_TAG = '{run_id}'").collect()
 
     forecast_input = prepare_data(session)
+    forecast_input = forecast_input.filter(F.col("ITEM_NUMBER_SITE")=="049851-031_101")
+    print("start", time.time())
     results = execute_training(session, run_id, forecast_input)
-    collect_forecasts(session, results)
+    results.filter(F.col("FORECASTED_DEMAND_INF").is_not_null()).show()
+    print("stop", time.time())
+    #collect_forecasts(session, results)
 
     return run_id
 
